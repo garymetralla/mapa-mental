@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Mapa Mental Avanzado</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      margin: 0;
+      padding: 20px;
+      background: linear-gradient(to right, #ff6e7f, #bfe9ff);
+      overflow: hidden;
+      color: #333;
+    }
+    h1 {
+      text-align: center;
+      color: #2d3e50;
+      font-size: 36px;
+      margin-bottom: 30px;
+    }
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 10px;
+      margin-bottom: 20px;
+      font-size: 16px;
+    }
+    .controls input, .controls button {
+      padding: 12px;
+      border-radius: 8px;
+      border: 2px solid #4a90e2;
+      font-size: 16px;
+      background-color: #fff;
+      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+      transition: background-color 0.3s ease;
+    }
+    .controls button {
+      background-color: #4a90e2;
+      color: white;
+      cursor: pointer;
+    }
+    .controls button:hover {
+      background-color: #357abd;
+    }
+    #mapWrapper {
+      width: 100%;
+      height: 75vh;
+      overflow: hidden;
+      border-radius: 10px;
+      position: relative;
+      background-color: #f7f7f7;
+      border: 1px solid #ccc;
+      box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+    }
+    #mapContainer {
+      width: 7000px;
+      height: 7000px;
+      position: relative;
+      transform-origin: 0 0;
+      cursor: grab;
+      background-color: #fafafa;
+      box-shadow: inset 0 0 15px rgba(0, 0, 0, 0.1);
+      border-radius: 12px;
+    }
+    .node {
+      position: absolute;
+      padding: 12px 18px;
+      background: #4a90e2;
+      color: white;
+      border-radius: 12px;
+      box-shadow: 2px 4px 8px rgba(0, 0, 0, 0.15);
+      cursor: move;
+      user-select: none;
+      touch-action: none;
+      transition: background-color 0.3s ease, transform 0.3s ease;
+    }
+    .node:hover {
+      background: #357abd;
+    }
+    svg {
+      position: absolute;
+      top: 0;
+      left: 0;
+      z-index: 0;
+      pointer-events: none;
+    }
+    .zoom-controls {
+      position: absolute;
+      bottom: 10px;
+      right: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+    .zoom-controls button {
+      padding: 10px;
+      font-size: 20px;
+      background-color: #333;
+      color: white;
+      border-radius: 50%;
+      cursor: pointer;
+      transition: background-color 0.3s ease;
+    }
+    .zoom-controls button:hover {
+      background-color: #444;
+    }
+    .comment-box {
+      position: absolute;
+      background-color: #fff;
+      border: 1px solid #4a90e2;
+      border-radius: 8px;
+      padding: 8px;
+      width: 200px;
+      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+      display: none;
+      z-index: 10;
+    }
+  </style>
+</head>
+<body>
+
+<h1>Mapa Mental Avanzado</h1>
+<div class="controls">
+  <input type="text" id="nodeText" placeholder="Texto del nodo" />
+  <button onclick="addNode()">Agregar Nodo</button>
+  <button onclick="startConnection()">Conectar Nodos</button>
+  <button onclick="adjustToScreen()">Ajustar Pantalla</button>
+  <button onclick="confirmClearMap()">Borrar Todo</button>
+  <button onclick="exportAsImage()">Exportar PNG</button>
+  <button onclick="exportAsPDF()">Exportar PDF</button>
+  <input type="file" id="importJson" onchange="importJSON(event)" />
+  <button onclick="exportJSON()">Exportar JSON</button>
+  <input type="text" id="searchNodeText" placeholder="Buscar Nodo" onkeyup="searchNode()" />
+</div>
+
+<div id="mapWrapper">
+  <div id="mapContainer">
+    <svg id="connections" width="100%" height="100%"></svg>
+  </div>
+  <div class="zoom-controls">
+    <button onclick="zoomMap(1.1)">+</button>
+    <button onclick="zoomMap(0.9)">−</button>
+  </div>
+</div>
+
+<!-- Comment Box -->
+<div id="commentBox" class="comment-box">
+  <textarea id="commentText" placeholder="Escribe un comentario..."></textarea>
+  <button onclick="saveComment()">Guardar Comentario</button>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
+<script>
+  let nodes = [];
+  let connections = [];
+  let nodeId = 0;
+  let connecting = false;
+  let firstNodeId = null;
+  let scale = 1;
+  let offsetX = 0, offsetY = 0;
+  let draggingMap = false;
+  let startDragX = 0, startDragY = 0;
+
+  let startPinchDist = 0;
+  let pinchStartScale = 1;
+
+  function saveToLocal() {
+    localStorage.setItem("mindMap", JSON.stringify({ nodes, connections }));
+  }
+
+  function loadMap() {
+    const data = JSON.parse(localStorage.getItem("mindMap"));
+    if (data) {
+      nodes = data.nodes;
+      connections = data.connections;
+      nodeId = Math.max(...nodes.map(n => n.id), 0) + 1;
+      document.getElementById("mapContainer").innerHTML = '<svg id="connections" width="100%" height="100%"></svg>';
+      nodes.forEach(drawNode);
+      updateConnections();
+    }
+  }
+
+  function addNode() {
+    const text = document.getElementById("nodeText").value.trim() || "Nodo " + nodeId;
+    const newNode = { id: nodeId, text, x: 100, y: 100, comment: "" };
+    nodes.push(newNode);
+    drawNode(newNode);
+    nodeId++;
+    document.getElementById("nodeText").value = "";
+    saveToLocal();
+  }
+
+  function drawNode(node) {
+    const el = document.createElement("div");
+    el.className = "node";
+    el.setAttribute("data-id", node.id);
+    el.textContent = node.text;
+    el.style.left = `${node.x}px`;
+    el.style.top = `${node.y}px`;
+
+    el.ondblclick = () => {
+      showCommentBox(node);
+    };
+
+    el.oncontextmenu = (e) => {
+      e.preventDefault();
+      if (confirm("¿Eliminar nodo?")) {
+        nodes = nodes.filter(n => n.id !== node.id);
+        connections = connections.filter(c => c[0] !== node.id && c[1] !== node.id);
+        el.remove();
+        updateConnections();
+        saveToLocal();
+      }
+    };
+
+    el.onclick = () => selectForConnection(node.id);
+    makeDraggable(el);
+    document.getElementById("mapContainer").appendChild(el);
+  }
+
+  function makeDraggable(el) {
+    let offsetX, offsetY;
+
+    const startDrag = (e) => {
+      const touch = e.touches ? e.touches[0] : e;
+      offsetX = touch.clientX - el.offsetLeft;
+      offsetY = touch.clientY - el.offsetTop;
+
+      const move = (e) => {
+        const touch = e.touches ? e.touches[0] : e;
+        el.style.left = `${touch.clientX - offsetX}px`;
+        el.style.top = `${touch.clientY - offsetY}px`;
+
+        const id = parseInt(el.getAttribute("data-id"));
+        const node = nodes.find(n => n.id === id);
+        if (node) {
+          node.x = touch.clientX - offsetX;
+          node.y = touch.clientY - offsetY;
+          updateConnections();
+          saveToLocal();
+        }
+      };
+
+      const stop = () => {
+        document.removeEventListener("mousemove", move);
+        document.removeEventListener("mouseup", stop);
+        document.removeEventListener("touchmove", move);
+        document.removeEventListener("touchend", stop);
+      };
+
+      document.addEventListener("mousemove", move);
+      document.addEventListener("mouseup", stop);
+      document.addEventListener("touchmove", move, { passive: false });
+      document.addEventListener("touchend", stop);
+    };
+
+    el.addEventListener("mousedown", startDrag);
+    el.addEventListener("touchstart", startDrag, { passive: false });
+  }
+
+  function showCommentBox(node) {
+    const commentBox = document.getElementById("commentBox");
+    const commentText = document.getElementById("commentText");
+
+    commentText.value = node.comment; // Show the current comment
+    commentBox.style.display = "block";
+    commentBox.style.left = `${node.x + 50}px`; // Position near node
+    commentBox.style.top = `${node.y + 30}px`;
+
+    // Save the node's comment after user input
+    window.currentNode = node;
+  }
+
+  function saveComment() {
+    const commentText = document.getElementById("commentText").value;
+    if (window.currentNode) {
+      window.currentNode.comment = commentText;
+      saveToLocal();
+    }
+    document.getElementById("commentBox").style.display = "none";
+  }
+
+  function startConnection() {
+    connecting = true;
+    alert("Haz clic en dos nodos para conectarlos.");
+  }
+
+  function selectForConnection(id) {
+    if (!connecting) return;
+    if (firstNodeId === null) {
+      firstNodeId = id;
+    } else {
+      if (firstNodeId !== id) {
+        connections.push([firstNodeId, id]);
+        updateConnections();
+        saveToLocal();
+      }
+      firstNodeId = null;
+      connecting = false;
+    }
+  }
+
+  function updateConnections() {
+    const svg = document.getElementById("connections");
+    svg.innerHTML = "";
+    connections.forEach(([fromId, toId]) => {
+      const fromNode = document.querySelector(`.node[data-id="${fromId}"]`);
+      const toNode = document.querySelector(`.node[data-id="${toId}"]`);
+      if (!fromNode || !toNode) return;
+
+      const x1 = fromNode.offsetLeft + fromNode.offsetWidth / 2;
+      const y1 = fromNode.offsetTop + fromNode.offsetHeight / 2;
+      const x2 = toNode.offsetLeft + toNode.offsetWidth / 2;
+      const y2 = toNode.offsetTop + toNode.offsetHeight / 2;
+
+      const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+      line.setAttribute("x1", x1);
+      line.setAttribute("y1", y1);
+      line.setAttribute("x2", x2);
+      line.setAttribute("y2", y2);
+      line.setAttribute("stroke", "#555");
+      line.setAttribute("stroke-width", "2");
+      svg.appendChild(line);
+    });
+  }
+
+  function confirmClearMap() {
+    if (confirm("¿Estás seguro de que quieres borrar todo el mapa mental? Esta acción no se puede deshacer.")) {
+      clearMap();
+    }
+  }
+
+  function clearMap() {
+    nodes = [];
+    connections = [];
+    nodeId = 0;
+    document.getElementById("mapContainer").innerHTML = '<svg id="connections" width="100%" height="100%"></svg>';
+    localStorage.removeItem("mindMap");
+  }
+
+  function zoomMap(factor) {
+    scale *= factor;
+    applyTransform();
+  }
+
+  function adjustToScreen() {
+    scale = 1;
+    offsetX = 0;
+    offsetY = 0;
+    applyTransform();
+  }
+
+  function applyTransform() {
+    const mapContainer = document.getElementById("mapContainer");
+    mapContainer.style.transform = `translate(${offsetX}px, ${offsetY}px) scale(${scale})`;
+  }
+
+  // Handle pinch-to-zoom
+  document.getElementById("mapContainer").addEventListener("touchstart", (e) => {
+    if (e.touches.length === 2) {
+      startPinchDist = getDistance(e.touches[0], e.touches[1]);
+      pinchStartScale = scale;
+    }
+  });
+
+  document.getElementById("mapContainer").addEventListener("touchmove", (e) => {
+    if (e.touches.length === 2) {
+      const pinchDist = getDistance(e.touches[0], e.touches[1]);
+      const pinchScale = pinchStartScale * (pinchDist / startPinchDist);
+      scale = pinchScale;
+      applyTransform();
+    }
+  });
+
+  document.getElementById("mapContainer").addEventListener("touchend", (e) => {
+    if (e.touches.length < 2) {
+      startPinchDist = 0;
+      pinchStartScale = 1;
+    }
+  });
+
+  function getDistance(touch1, touch2) {
+    const dx = touch2.clientX - touch1.clientX;
+    const dy = touch2.clientY - touch1.clientY;
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+
+  loadMap();
+
+  // Buscar nodo por texto
+  function searchNode() {
+    const searchText = document.getElementById("searchNodeText").value.toLowerCase();
+    const allNodes = document.querySelectorAll('.node');
+    allNodes.forEach(node => {
+      const nodeText = node.textContent.toLowerCase();
+      if (nodeText.includes(searchText)) {
+        node.style.backgroundColor = '#ff5722';  // Resaltar el nodo encontrado
+      } else {
+        node.style.backgroundColor = '#4a90e2';  // Restaurar el color original
+      }
+    });
+  }
+</script>
+
+</body>
+</html>
